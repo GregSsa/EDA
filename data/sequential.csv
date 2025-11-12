@@ -1,0 +1,4 @@
+client_id,sequence
+C1,"""(bread,milk),(butter)"""
+C2,"""(bread),(butter,cheese)"""
+C3,"""(milk),(eggs),(cheese)"""
