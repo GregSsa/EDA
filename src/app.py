@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 from mlxtend.preprocessing import TransactionEncoder
+import altair as alt
 
 # Importation des modules locaux
 from load_data import TransactionDf, load_transactions_simple
-from mining import run_fpgrowth, generate_rules
+from mining import run_fpgrowth, generate_rules, mcmc_sampler_rules
 from scoring import compute_composite_scores
 from sampling import weighted_sampling, light_mcmc
 from feedback import apply_like, apply_dislike, reset_feedback
@@ -14,7 +15,7 @@ st.set_page_config(page_title="Fouille Interactive de Motifs", layout="wide")
 
 # --- 1. Gestion du Cache ---
 @st.cache_resource
-def load_and_process_data(file_path, formatting, min_support, target_col=None, id_col=None):
+def load_and_process_data(file_path, formatting, min_support, extraction_method, mcmc_iterations=5000, target_col=None, id_col=None):
     """Charge les données et extrait les règles initiales.
     Cette fonction n'est exécutée que si les arguments changent.
     """
@@ -31,11 +32,16 @@ def load_and_process_data(file_path, formatting, min_support, target_col=None, i
             return None
         df_transactions = T.dfs[0]
 
-    # Extraction des motifs (Partie coûteuse en temps)
-    frequent_itemsets = run_fpgrowth(df_transactions, min_support=min_support)
-
-    # Seuil de confiance très bas pour voir un maximum de règles au début
-    rules = generate_rules(frequent_itemsets, metric='confidence', min_threshold=0.01)
+    # --- Choix de la méthode d'extraction ---
+    if extraction_method == "Exhaustive (FP-Growth)":
+        # Extraction des motifs (Partie coûteuse en temps)
+        frequent_itemsets = run_fpgrowth(df_transactions, min_support=min_support)
+        # Seuil de confiance très bas pour voir un maximum de règles au début
+        rules = generate_rules(frequent_itemsets, metric='confidence', min_threshold=0.01)
+    
+    elif extraction_method == "Échantillonnage (MCMC)":
+        st.info(f"Lancement de l'échantillonnage MCMC avec {mcmc_iterations} itérations...")
+        rules = mcmc_sampler_rules(df_transactions, n_iterations=mcmc_iterations, min_support=min_support)
 
     if rules.empty:
         return pd.DataFrame()  # Retourne vide proprement
@@ -80,7 +86,13 @@ with st.sidebar:
         uploaded_file.seek(0)  # Important : Rembobiner le fichier après lecture
 
     st.header("2. Extraction")
+    extraction_method = st.selectbox("Méthode d'extraction", ["Exhaustive (FP-Growth)", "Échantillonnage (MCMC)"])
     min_sup = st.slider("Support Minimum", 0.01, 0.5, 0.05)  # Valeur par défaut 5%
+
+    mcmc_iterations = None
+    if extraction_method == "Échantillonnage (MCMC)":
+        mcmc_iterations = st.slider("Nombre d'itérations MCMC", 1000, 20000, 5000)
+
 
     st.header("3. Scoring")
     w_lift = st.slider("Poids Lift", 0.0, 1.0, 0.5)
@@ -110,8 +122,15 @@ if uploaded_file is not None:
     if ready_to_load:
         try:
             # Chargement (mis en cache)
-            rules_initial = load_and_process_data(f"temp_{uploaded_file.name}", format_option, min_sup, target_col,
-                                                  id_col)
+            rules_initial = load_and_process_data(
+                f"temp_{uploaded_file.name}", 
+                formatting=format_option, 
+                min_support=min_sup, 
+                extraction_method=extraction_method,
+                mcmc_iterations=mcmc_iterations,
+                target_col=target_col,
+                id_col=id_col
+            )
 
             if rules_initial is not None and not rules_initial.empty:
                 # Initialisation ou mise à jour du pool dans l'état de session
@@ -135,6 +154,17 @@ if uploaded_file is not None:
                     st.success("Feedback réinitialisé.")
 
                 st.success(f"Pool chargé : {len(current_pool)} règles trouvées.")
+
+                # --- Ajout de la visualisation de la distribution ---
+                st.subheader("Distribution des scores des motifs")
+                chart = alt.Chart(current_pool).mark_bar().encode(
+                    alt.X("composite_score:Q", bin=alt.Bin(maxbins=50), title="Score Composite"),
+                    alt.Y('count()', title="Nombre de règles")
+                ).properties(
+                    title="Distribution des scores composites dans le pool de règles"
+                )
+                st.altair_chart(chart, use_container_width=True)
+
 
                 # Echantillonnage
                 try:
@@ -169,7 +199,7 @@ if uploaded_file is not None:
                     st.warning(f"Impossible d'échantillonner : {e}")
 
             else:
-                st.warning("Aucune règle trouvée. Essayez de baisser le 'Support Minimum'.")
+                st.warning("Aucune règle trouvée. Essayez de baisser le 'Support Minimum' ou d'augmenter le nombre d'itérations.")
         except Exception as e:
             st.error(f"Erreur technique : {e}")
     else:
