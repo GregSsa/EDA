@@ -167,12 +167,12 @@ def calculate_composite_score(df, w_support, w_lift, w_conf, w_surprise, w_redun
               w_redundancy * (df['length'] / 10))
     return scores
 
-def light_mcmc(P_df, k=10, replace=True, max_iters=10000, random_state=None):
+def light_mcmc(P_df, k=10, replace=True, max_iters=10000, random_seed=None):
     weights = P_df['final_sampling_weight'].values.copy()
     weights = np.maximum(weights, 0.0)
     if weights.sum() == 0: weights = np.ones_like(weights)
 
-    rng = np.random.default_rng(random_state)
+    rng = np.random.default_rng(random_seed)
     n = len(weights)
     if n == 0: return P_df.copy()
 
