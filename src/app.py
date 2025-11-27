@@ -4,7 +4,7 @@ import time
 import matplotlib.pyplot as plt
 import seaborn as sns
 from mlxtend.frequent_patterns import fpgrowth, association_rules
-from utils import TransactionDf, calculate_composite_score, light_mcmc, calculate_diversity
+from utils import TransactionDf, calculate_composite_score, light_mcmc, calculate_diversity, pattern_sample_mcmc
 
 st.set_page_config(page_title="EDA Project - Pattern Mining", layout="wide")
 
@@ -21,10 +21,16 @@ target_col = ""
 
 st.sidebar.markdown("---")
 st.sidebar.header("2. Paramètres Extraction")
-# Choix de l'algorithme (Pour répondre à la consigne 5, même si simulé)
-algo_choice = st.sidebar.radio("Algorithme", ["Exhaustive (FP-Growth)", "Output Sampling (Simulé)"])
-min_support = st.sidebar.slider("Support Min", 0.01, 1.0, 0.1, 0.01)
+
+algo_choice = st.sidebar.radio("Méthode", ["Exhaustive (FP-Growth)", "Output Sampling (MCMC)"])
+min_support = st.sidebar.slider("Support Min (exhaustif)", 0.01, 1.0, 0.1, 0.01)
 min_confidence = st.sidebar.slider("Confiance Min", 0.0, 1.0, 0.5, 0.1)
+
+if algo_choice == "Output Sampling (MCMC)":
+    sampling_iterations = st.sidebar.number_input("Itérations MCMC", 1000, 100000, 5000, 1000)
+    sampling_min_support = st.sidebar.slider("Support Min (sampling)", 0.0, 0.5, 0.005, 0.01)
+    sampling_max_rules = st.sidebar.number_input("Nb max règles", 50, 5000, 500, 50)
+    sampling_interest = st.sidebar.selectbox("Mesure d'intérêt (distribution)", ["lift", "confidence", "support", "composite (lift*confidence)"])
 
 st.sidebar.markdown("---")
 st.sidebar.header("3. Scoring & Poids")
@@ -84,31 +90,51 @@ if uploaded_file:
             if st.button("Lancer l'Extraction"):
                 start_time = time.time()
                 with st.spinner("Extraction..."):
-                    # Simulation consigne 5 : Si Output Sampling, on échantillonne les données AVANT extraction
-                    if algo_choice == "Output Sampling (Simulé)":
-                        df_for_mining = df_encoded.sample(frac=0.5, random_state=int(random_seed)) # 50% des données
-                        st.info("Mode Échantillonnage : Extraction sur 50% de la base.")
-                    else:
+                    if algo_choice == "Exhaustive (FP-Growth)":
                         df_for_mining = df_encoded
-
-                    frequent = fpgrowth(df_for_mining.astype(bool), min_support=min_support, use_colnames=True)
-                    if frequent.empty:
-                        st.warning("Aucun motif trouvé.")
+                        frequent = fpgrowth(df_for_mining.astype(bool), min_support=min_support, use_colnames=True)
+                        if frequent.empty:
+                            st.warning("Aucun motif trouvé.")
+                        else:
+                            rules = association_rules(frequent, metric="confidence", min_threshold=min_confidence)
+                            if rules.empty:
+                                st.warning("Aucune règle trouvée.")
+                            else:
+                                end_time = time.time()
+                                st.session_state['exec_time'] = end_time - start_time
+                                rules['length'] = rules['antecedents'].apply(len) + rules['consequents'].apply(len)
+                                # Coverage (renommage éventuel)
+                                if 'antecedent support' in rules.columns:
+                                    rules.rename(columns={'antecedent support': 'coverage'}, inplace=True)
+                                rules['antecedents_str'] = rules['antecedents'].apply(lambda x: ', '.join(list(x)))
+                                rules['consequents_str'] = rules['consequents'].apply(lambda x: ', '.join(list(x)))
+                                rules['rule_id'] = rules.index
+                                st.session_state['pool_rules'] = rules
+                                st.session_state['feedback_weights'] = {i: 1.0 for i in rules.index}
+                                st.success(f"Extraction terminée en {st.session_state['exec_time']:.3f} sec : {len(rules)} règles.")
                     else:
-                        rules = association_rules(frequent, metric="confidence", min_threshold=min_confidence)
-                        if rules.empty:
-                            st.warning("Aucune règle trouvée.")
+                        st.info("Mode Output Sampling (MCMC): génération directe de règles échantillonnées.")
+                        sampled_rules = pattern_sample_mcmc(
+                            df_encoded,
+                            iterations=int(sampling_iterations),
+                            min_support=float(sampling_min_support),
+                            max_rules=int(sampling_max_rules),
+                            random_seed=int(random_seed)
+                        )
+                        if sampled_rules.empty:
+                            st.warning("Aucune règle échantillonnée (essayez diminuer le support ou augmenter les itérations).")
                         else:
                             end_time = time.time()
                             st.session_state['exec_time'] = end_time - start_time
-                            
-                            rules['length'] = rules['antecedents'].apply(len) + rules['consequents'].apply(len)
-                            rules['antecedents_str'] = rules['antecedents'].apply(lambda x: ', '.join(list(x)))
-                            rules['consequents_str'] = rules['consequents'].apply(lambda x: ', '.join(list(x)))
-                            rules['rule_id'] = rules.index
-                            st.session_state['pool_rules'] = rules
-                            st.session_state['feedback_weights'] = {i: 1.0 for i in rules.index}
-                            st.success(f"Extraction terminée en {st.session_state['exec_time']:.3f} sec : {len(rules)} règles.")
+                            # Harmonisation colonnes
+                            if 'coverage' not in sampled_rules.columns and 'support' in sampled_rules.columns:
+                                sampled_rules['coverage'] = sampled_rules['support']  # fallback
+                            sampled_rules['antecedents_str'] = sampled_rules['antecedents'].apply(lambda x: ', '.join(list(x)))
+                            sampled_rules['consequents_str'] = sampled_rules['consequents'].apply(lambda x: ', '.join(list(x)))
+                            sampled_rules['rule_id'] = sampled_rules.index
+                            st.session_state['pool_rules'] = sampled_rules
+                            st.session_state['feedback_weights'] = {i: 1.0 for i in sampled_rules.index}
+                            st.success(f"Sampling terminé en {st.session_state['exec_time']:.3f} sec : {len(sampled_rules)} règles.")
 
             if st.session_state['pool_rules'] is not None:
                 rules_df = st.session_state['pool_rules']
@@ -199,6 +225,27 @@ if uploaded_file:
                         sns.histplot(st.session_state['last_sample']['final_sampling_weight'], kde=True, ax=ax2, color="blue", label="Sample")
                     ax2.legend()
                     st.pyplot(fig2)
+
+                    if algo_choice == "Output Sampling (MCMC)":
+                        st.write("### Distribution (Output Sampling) — mesure d'intérêt")
+                        if 'pool_rules' in st.session_state and st.session_state['pool_rules'] is not None:
+                            sr = None
+                            if sampling_interest == "lift" and 'lift' in rules_df.columns:
+                                sr = rules_df['lift']
+                            elif sampling_interest == "confidence" and 'confidence' in rules_df.columns:
+                                sr = rules_df['confidence']
+                            elif sampling_interest == "support" and 'support' in rules_df.columns:
+                                sr = rules_df['support']
+                            elif sampling_interest == "composite (lift*confidence)" and {'lift','confidence'}.issubset(rules_df.columns):
+                                sr = (rules_df['lift'] * rules_df['confidence']).rename('composite')
+
+                            if sr is not None and len(sr) > 0:
+                                fig3, ax3 = plt.subplots()
+                                sns.histplot(sr, kde=True, ax=ax3, color="purple")
+                                ax3.set_title(f"Distribution de {sampling_interest}")
+                                st.pyplot(fig3)
+                            else:
+                                st.info("Mesure d'intérêt indisponible sur le pool courant.")
 
     except Exception as e:
         st.error(f"Erreur : {e}")

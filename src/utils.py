@@ -200,3 +200,144 @@ def light_mcmc(P_df, k=10, replace=True, max_iters=10000, random_seed=None):
             samples.extend(fill)
 
     return P_df.iloc[samples].reset_index(drop=True)
+
+
+# --- Fonctions utilitaires pour MCMC ---
+def support(itemset: frozenset, vertical: dict, N: int) -> float:
+    """Calcul rapide du support via l'index vertical. Plus rapide que fpgrowth pour petits itemsets."""
+    if not itemset:
+        return 0.0
+    # intersection des ensembles d'indices
+    it = iter(itemset)
+    inter = set(vertical[next(it)])
+    for item in it:
+        inter &= vertical[item]
+        if not inter:
+            return 0.0
+    return len(inter) / float(N)
+
+def interest_weight(itemset: frozenset, interest: str, rng, vertical: dict, N: int) -> float:
+    """Poids d'intérêt utilisé par Metropolis-Hastings."""
+    if len(itemset) < 2:
+        return 0.0
+    # Choix d'un conséquent aléatoire
+    cons = frozenset([rng.choice(list(itemset))])
+    ant = itemset - cons
+    sup_cur = support(itemset, vertical, N)
+    sup_ant = support(ant, vertical, N)
+    sup_cons = support(cons, vertical, N)
+    if sup_ant <= 0 or sup_cons <= 0:
+        return 0.0
+    conf = sup_cur / sup_ant
+    lift = conf / sup_cons if sup_cons > 0 else 0.0
+    if interest == "composite":
+        return max(0.0, lift * conf)
+    return max(0.0, lift)
+
+
+# --- Pattern Sampling (Output Sampling) MCMC ---
+def pattern_sample_mcmc(df_onehot: pd.DataFrame,
+                        iterations: int = 5000,
+                        min_support: float = 0.005,
+                        max_rules: int = 500,
+                        random_seed: int | None = None,
+                        burn_in: int = 0,
+                        thinning: int = 1,
+                        interest: str = "lift",
+                        return_stats: bool = False) -> pd.DataFrame | tuple[pd.DataFrame, dict]:
+    
+    rng = np.random.default_rng(random_seed)
+
+    # Préparation: columns as items; ensure int/bool
+    df_bin = df_onehot.fillna(0).astype(int)
+    items = list(df_bin.columns)
+    n_items = len(items)
+    if n_items == 0:
+        empty = pd.DataFrame(columns=['antecedents','consequents','support','confidence','lift','coverage','length'])
+        return (empty, {'accept_rate': 0.0}) if return_stats else empty
+
+    # Index vertical pour support rapide
+    vertical = {col: set(df_bin.index[df_bin[col] == 1]) for col in items}
+    N = len(df_bin)
+
+    # État initial: itemset aléatoire de taille 1 ou 2
+    cur_size = 2 if n_items >= 2 else 1
+    current = frozenset(rng.choice(items, size=cur_size, replace=False))
+
+    rules_store: dict[tuple[frozenset,frozenset], dict] = {}
+    accepts = 0
+    proposals = 0
+
+    for t in range(iterations):
+        if len(rules_store) >= max_rules:
+            break
+
+        proposal = set(current)
+        # Choix move: add ou remove
+        if rng.random() < 0.5 and len(proposal) > 1:
+            # remove
+            to_remove = rng.choice(list(proposal))
+            proposal.remove(to_remove)
+        else:
+            # add (si possible)
+            remaining = [it for it in items if it not in proposal]
+            if remaining:
+                to_add = rng.choice(remaining)
+                proposal.add(to_add)
+
+        proposal = frozenset(proposal)
+        proposals += 1
+        sup_prop = support(proposal, vertical, N)
+        sup_cur = support(current, vertical, N)
+
+        # Contrainte dure: min_support
+        if sup_prop < min_support:
+            # rejet direct
+            pass
+        else:
+            # Metropolis–Hastings selon poids d'intérêt
+            w_prop = interest_weight(proposal, interest, rng, vertical, N)
+            w_cur = interest_weight(current, interest, rng, vertical, N)
+            alpha = 1.0
+            if w_cur > 0:
+                alpha = min(1.0, (w_prop / w_cur))
+            elif w_prop > 0:
+                alpha = 1.0
+            else:
+                alpha = 0.0
+            if rng.random() < alpha:
+                current = proposal
+                accepts += 1
+
+            if t >= burn_in and (t - burn_in) % max(1, thinning) == 0 and len(current) >= 2:
+                # Génération d'une règle: item consequent aléatoire
+                consequent = frozenset([rng.choice(list(current))])
+                antecedent = current - consequent
+                sup_ant = support(antecedent, vertical, N)
+                sup_cons = support(consequent, vertical, N)
+                if sup_ant > 0 and sup_cons > 0:
+                    confidence = sup_cur / sup_ant
+                    lift = confidence / sup_cons if sup_cons > 0 else 0
+                    coverage = sup_ant
+                    if lift > 1:  # règle intéressante
+                        key = (antecedent, consequent)
+                        if key not in rules_store:
+                            rules_store[key] = {
+                                'antecedents': antecedent,
+                                'consequents': consequent,
+                                'support': sup_cur,
+                                'confidence': confidence,
+                                'lift': lift,
+                                'coverage': coverage,
+                                'length': len(current)
+                            }
+
+    accept_rate = (accepts / proposals) if proposals > 0 else 0.0
+    stats = {'accept_rate': accept_rate, 'iterations': iterations, 'burn_in': burn_in, 'thinning': thinning}
+
+    if not rules_store:
+        empty = pd.DataFrame(columns=['antecedents','consequents','support','confidence','lift','coverage','length'])
+        return (empty, stats) if return_stats else empty
+
+    df_rules = pd.DataFrame.from_records(list(rules_store.values()))
+    return (df_rules, stats) if return_stats else df_rules
