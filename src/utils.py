@@ -9,7 +9,7 @@ class TransactionDf():
     def __init__(self, file_path=None, dataframe=None, header=False, target_column=None, separator=",", formatting="Auto"):
         self.dfs = []
         self.last_mining_time = 0 # Pour métrique temps
-        
+
         raw_df = None
         if dataframe is not None:
             raw_df = dataframe
@@ -18,12 +18,12 @@ class TransactionDf():
                 raw_df = pd.read_csv(file_path)
             else:
                 raw_df = pd.read_csv(file_path, header=None)
-        
+
         if raw_df is not None:
             if formatting == "Auto":
                 formatting = self._detect_format(raw_df)
                 # print(f"Format détecté automatiquement : {formatting}")
-            
+
             self._process_transactions(raw_df, target_column, separator, formatting)
 
     def _detect_format(self, df):
@@ -34,7 +34,7 @@ class TransactionDf():
                 return "Sequential"
 
         numeric_cols = df.select_dtypes(include=[np.number, bool]).columns
-        if len(numeric_cols) >= 2: 
+        if len(numeric_cols) >= 2:
             sample = df[numeric_cols].sample(min(len(df), 50)).fillna(0)
             unique_vals = np.unique(sample.values)
             is_binary = set(unique_vals).issubset({0, 1, 0.0, 1.0})
@@ -78,7 +78,7 @@ class TransactionDf():
 
         elif formatting == "Wide_Transposed":
             transactions = transactions.T
-            transactions.columns = ["items"] 
+            transactions.columns = ["items"]
             return self._process_transactions(transactions, "items", sep, "Basic")
 
         elif formatting == "Wide_OneHot" or formatting == "Wide":
@@ -112,7 +112,7 @@ class TransactionDf():
         if self.dfs and not sample_rules.empty:
             df = self.dfs[0]
             covered_indices = set()
-            
+
             # Pour chaque règle de l'échantillon
             for _, rule in sample_rules.iterrows():
                 # On récupère les items de l'antécédent
@@ -123,7 +123,7 @@ class TransactionDf():
                     # Masque booléen pour cette règle
                     mask = (df[antecedents] == 1).all(axis=1)
                     covered_indices.update(df[mask].index.tolist())
-            
+
             return len(covered_indices) / len(df)
         return 0.0
 
@@ -131,15 +131,15 @@ class TransactionDf():
 def calculate_diversity(sample_df):
     """Calcul simple de diversité : (Nombre d'items uniques utilisés) / (Total items possibles dans l'échantillon)"""
     if sample_df.empty: return 0.0
-    
+
     unique_items = set()
     total_slots = 0
-    
+
     for _, row in sample_df.iterrows():
         items = set(row['antecedents']).union(set(row['consequents']))
         unique_items.update(items)
         total_slots += len(items)
-        
+
     # Jaccard moyen entre paires serait mieux mais lourd, ici une heuristique simple
     # Diversité = ratio d'items uniques par rapport à la "place" utilisée
     if total_slots == 0: return 0
@@ -152,12 +152,12 @@ def calculate_composite_score(df, w_support, w_lift, w_conf, w_surprise, w_redun
     try:
         df_norm[metrics] = scaler.fit_transform(df[metrics])
     except:
-        df_norm[metrics] = 0.5 
+        df_norm[metrics] = 0.5
 
-    scores = (w_lift * df_norm['lift'] + 
-              w_conf * df_norm['confidence'] + 
-              w_support * df_norm['support'] + 
-              w_surprise * (1 - df_norm['support']) - 
+    scores = (w_lift * df_norm['lift'] +
+              w_conf * df_norm['confidence'] +
+              w_support * df_norm['support'] +
+              w_surprise * (1 - df_norm['support']) -
               w_redundancy * (df['length'] / 10))
     return scores
 
@@ -180,10 +180,10 @@ def light_mcmc(P_df, k=10, replace=True, max_iters=10000, random_seed=None):
         w_cur = weights[cur] if weights[cur] > 0 else 1e-12
         w_prop = weights[prop] if weights[prop] > 0 else 1e-12
         alpha = min(1.0, (w_prop / w_cur))
-        
+
         if rng.random() < alpha:
             cur = prop
-            
+
         if replace:
             samples.append(cur)
         else:
@@ -191,7 +191,7 @@ def light_mcmc(P_df, k=10, replace=True, max_iters=10000, random_seed=None):
                 samples.append(cur)
                 visited.add(cur)
         iters += 1
-    
+
     if not replace and len(samples) < k:
         remaining = list(set(range(n)) - visited)
         if remaining:
@@ -240,12 +240,12 @@ def pattern_sample_mcmc(df_onehot: pd.DataFrame,
                         iterations: int = 5000,
                         min_support: float = 0.005,
                         max_rules: int = 500,
-                        random_seed: int | None = None,
+                        random_seed: int = None,
                         burn_in: int = 0,
                         thinning: int = 1,
                         interest: str = "lift",
-                        return_stats: bool = False) -> pd.DataFrame | tuple[pd.DataFrame, dict]:
-    
+                        return_stats: bool = False):
+
     rng = np.random.default_rng(random_seed)
 
     # Préparation: columns as items; ensure int/bool
