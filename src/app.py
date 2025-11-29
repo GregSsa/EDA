@@ -1,11 +1,9 @@
 import streamlit as st
 import pandas as pd
 import time
-import matplotlib.pyplot as plt
-import seaborn as sns
 import plotly.express as px
 from mlxtend.frequent_patterns import fpgrowth, association_rules
-# On suppose que votre fichier utils.py est dans le même dossier
+# Assurez-vous que utils.py est bien dans le dossier
 from utils import TransactionDf, calculate_composite_score, light_mcmc, calculate_diversity, pattern_sample_mcmc
 
 # --- CONFIGURATION DE LA PAGE ---
@@ -18,12 +16,37 @@ st.set_page_config(
 
 st.title("⛏️ Projet EDA : Fouille Interactive de Motifs")
 
+# --- GESTION ÉTAT & NETTOYAGE AUTOMATIQUE ---
+# Cette section doit être tout en haut pour intercepter le changement de fichier
+if 'last_uploaded_file' not in st.session_state:
+    st.session_state['last_uploaded_file'] = None
+
+
+def clear_cache():
+    """Nettoie toute la mémoire de session liée aux données"""
+    keys_to_clear = ['pool_rules', 'feedback_weights', 'last_sample', 'exec_time', 'processor']
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+
+
 # --- SIDEBAR (PARAMÈTRES) ---
 with st.sidebar:
     st.header("1. Configuration")
+
+    # Widget d'upload
     uploaded_file = st.file_uploader("Charger un CSV", type=["csv"])
+
+    # DÉTECTION DE CHANGEMENT DE FICHIER
+    # Si le fichier change (ou devient None), on reset tout.
+    if uploaded_file != st.session_state['last_uploaded_file']:
+        clear_cache()
+        st.session_state['last_uploaded_file'] = uploaded_file
+        # On force un rerun immédiat pour que l'interface se mette à jour à vide
+        st.rerun()
+
     format_option = st.selectbox("Format", ["Auto", "Basic", "Long", "Wide", "Sequential"])
-    sep_option = ','  # Simplification, peut être remis en input si besoin
+    sep_option = ','
     target_col = ""
 
     st.markdown("---")
@@ -43,7 +66,6 @@ with st.sidebar:
 
     st.markdown("---")
     st.header("3. Scoring & Poids")
-    st.caption("Définissez vos préférences pour le tri.")
     w_support = st.slider("Poids Support", 0.0, 1.0, 0.2)
     w_lift = st.slider("Poids Lift", 0.0, 1.0, 0.2)
     w_conf = st.slider("Poids Confiance", 0.0, 1.0, 0.2)
@@ -55,30 +77,33 @@ with st.sidebar:
     replace_strategy = st.checkbox("Avec Remise", value=True)
     random_seed = st.number_input("Seed", value=42)
 
-# --- STATE MANAGEMENT ---
-# Initialisation des variables de session pour garder la mémoire entre les clics
+# --- INIT VARIABLES SESSION (si elles n'existent pas après le clear) ---
 if 'pool_rules' not in st.session_state: st.session_state['pool_rules'] = None
 if 'feedback_weights' not in st.session_state: st.session_state['feedback_weights'] = {}
 if 'last_sample' not in st.session_state: st.session_state['last_sample'] = None
 if 'exec_time' not in st.session_state: st.session_state['exec_time'] = 0.0
 if 'processor' not in st.session_state: st.session_state['processor'] = None
 
-
-def reset_feedback():
-    st.session_state['feedback_weights'] = {}
-    st.toast("Feedback réinitialisé !", icon="↺")
-
-
 # --- MAIN LOGIC ---
 if uploaded_file:
     try:
         # Chargement et Preprocessing
-        raw_df = pd.read_csv(uploaded_file)
+        # On utilise une clé de cache basée sur le file_id pour éviter de recharger pandas à chaque clic
+        @st.cache_data
+        def load_data(file):
+            return pd.read_csv(file)
+
+
+        raw_df = load_data(uploaded_file)
         tgt = target_col if target_col.strip() != "" else None
 
-        processor = TransactionDf(dataframe=raw_df, target_column=tgt, separator=sep_option, formatting=format_option)
-        st.session_state['processor'] = processor
-        df_encoded = processor.get_df()
+        # On ne réinstancie le processor que s'il est vide (optimisation)
+        if st.session_state['processor'] is None:
+            processor = TransactionDf(dataframe=raw_df, target_column=tgt, separator=sep_option,
+                                      formatting=format_option)
+            st.session_state['processor'] = processor
+
+        df_encoded = st.session_state['processor'].get_df()
 
         if df_encoded is None or df_encoded.empty:
             st.error("Erreur : Impossible de traiter le fichier. Vérifiez le format.")
@@ -101,7 +126,6 @@ if uploaded_file:
                     st.markdown("**Top 20 Items les plus fréquents**")
                     item_counts = df_encoded.sum().sort_values(ascending=False).head(20).reset_index()
                     item_counts.columns = ['Item', 'Frequence']
-                    # Bar Chart Interactif
                     fig = px.bar(item_counts, x='Item', y='Frequence', color='Frequence',
                                  color_continuous_scale='Viridis', title="Distribution des Items")
                     st.plotly_chart(fig, use_container_width=True)
@@ -116,6 +140,7 @@ if uploaded_file:
                 with c_btn:
                     launch_btn = st.button("🚀 Lancer l'Extraction", type="primary", use_container_width=True)
 
+                # Logique d'extraction
                 if launch_btn:
                     start_time = time.time()
                     with st.spinner("Algorithme en cours d'exécution..."):
@@ -129,13 +154,12 @@ if uploaded_file:
                                 if rules.empty:
                                     st.warning("Aucune règle trouvée. Essayez de baisser la confiance.")
                                 else:
-                                    # Post-processing
                                     end_time = time.time()
                                     st.session_state['exec_time'] = end_time - start_time
                                     rules['length'] = rules['antecedents'].apply(len) + rules['consequents'].apply(len)
                                     if 'antecedent support' in rules.columns:
                                         rules.rename(columns={'antecedent support': 'coverage'}, inplace=True)
-                                    # Conversion frozenset -> string pour affichage
+
                                     rules['antecedents_str'] = rules['antecedents'].apply(lambda x: ', '.join(list(x)))
                                     rules['consequents_str'] = rules['consequents'].apply(lambda x: ', '.join(list(x)))
                                     rules['rule_id'] = rules.index
@@ -145,7 +169,6 @@ if uploaded_file:
                                     st.success(
                                         f"Extraction terminée en {st.session_state['exec_time']:.3f} sec : {len(rules)} règles.")
                         else:
-                            # Mode MCMC
                             st.info("Mode Sampling MCMC activé.")
                             sampled_rules = pattern_sample_mcmc(
                                 df_encoded,
@@ -171,14 +194,14 @@ if uploaded_file:
                                 st.success(
                                     f"Sampling terminé en {st.session_state['exec_time']:.3f} sec : {len(sampled_rules)} règles.")
 
-                # --- Visualisation du Pool ---
+                # Visualisation du Pool (Uniquement si pool existe)
                 if st.session_state['pool_rules'] is not None:
                     rules_df = st.session_state['pool_rules'].copy()
 
                     st.divider()
-
-                    # 1. FILTRE PAR ITEM
                     st.markdown("#### 🔍 Explorer les règles")
+
+                    # Filtre produits
                     all_items_in_rules = sorted(list(set(
                         [item for sublist in rules_df['antecedents'] for item in sublist] +
                         [item for sublist in rules_df['consequents'] for item in sublist]
@@ -188,7 +211,6 @@ if uploaded_file:
                     with col_filter:
                         selected_items = st.multiselect("Filtrer par produit (contient...)", all_items_in_rules)
 
-                    # Application du filtre
                     if selected_items:
                         mask = rules_df.apply(lambda r: any(i in r['antecedents'] for i in selected_items) or
                                                         any(i in r['consequents'] for i in selected_items), axis=1)
@@ -197,69 +219,47 @@ if uploaded_file:
                         rules_filtered = rules_df
 
                     with col_dl:
-                        # Bouton Export CSV
                         csv = rules_filtered.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="💾 Télécharger CSV",
-                            data=csv,
-                            file_name='regles_association.csv',
-                            mime='text/csv',
-                        )
+                        st.download_button("💾 Télécharger CSV", data=csv, file_name='regles_association.csv',
+                                           mime='text/csv')
 
                     st.caption(f"Affichage de **{len(rules_filtered)}** règles sur {len(rules_df)}.")
 
                     col_viz1, col_viz2 = st.columns([1.5, 1])
-
-                    # 2. SCATTER PLOT
                     with col_viz1:
                         if not rules_filtered.empty:
                             fig_scatter = px.scatter(
-                                rules_filtered,
-                                x="support",
-                                y="confidence",
-                                size="lift",
-                                color="lift",
+                                rules_filtered, x="support", y="confidence", size="lift", color="lift",
                                 hover_data=["antecedents_str", "consequents_str"],
-                                title="Support vs Confiance (Taille=Lift)",
-                                color_continuous_scale="RdBu_r"
+                                title="Support vs Confiance (Taille=Lift)", color_continuous_scale="RdBu_r"
                             )
                             st.plotly_chart(fig_scatter, use_container_width=True)
                         else:
                             st.info("Aucune règle ne correspond aux filtres.")
 
-                    # 3. DATAFRAME LIST
                     with col_viz2:
                         st.dataframe(
                             rules_filtered[['antecedents_str', 'consequents_str', 'lift', 'confidence', 'support']],
-                            height=400,
-                            hide_index=True,
-                            use_container_width=True
+                            height=400, hide_index=True, use_container_width=True
                         )
 
-                    # 4. HEATMAP (Si < 100 règles ou Top 50)
-                    if not rules_filtered.empty:
+                    # Heatmap
+                    if not rules_filtered.empty and len(rules_filtered) < 200:
                         st.divider()
-                        st.markdown("#### 🔥 Heatmap des Associations (Top 50 par Lift)")
-
+                        st.markdown("#### 🔥 Heatmap des Associations (Top 50)")
                         top_rules = rules_filtered.sort_values('lift', ascending=False).head(50)
-                        # Raccourcir les noms trop longs pour l'affichage
                         top_rules['ant_short'] = top_rules['antecedents_str'].apply(
-                            lambda x: x[:20] + '..' if len(x) > 20 else x)
+                            lambda x: x[:15] + '..' if len(x) > 15 else x)
                         top_rules['cons_short'] = top_rules['consequents_str'].apply(
-                            lambda x: x[:20] + '..' if len(x) > 20 else x)
-
+                            lambda x: x[:15] + '..' if len(x) > 15 else x)
                         try:
                             pivot_df = top_rules.pivot_table(index='ant_short', columns='cons_short', values='lift')
-                            fig_heat = px.imshow(
-                                pivot_df,
-                                text_auto=".1f",
-                                aspect="auto",
-                                color_continuous_scale="Viridis",
-                                title="Matrice Antécédents (Y) vs Conséquents (X) - Valeur = Lift"
-                            )
+                            fig_heat = px.imshow(pivot_df, text_auto=".1f", aspect="auto",
+                                                 color_continuous_scale="Viridis",
+                                                 title="Matrice Antécédents (Y) vs Conséquents (X) - Valeur = Lift")
                             st.plotly_chart(fig_heat, use_container_width=True)
-                        except Exception as e:
-                            st.caption("Heatmap non disponible (structure de données complexe).")
+                        except:
+                            pass
 
             # ==========================
             # TAB 3: INTERACTIF
@@ -270,13 +270,12 @@ if uploaded_file:
                 else:
                     rules_df = st.session_state['pool_rules']
 
-                    # --- RE-CALCUL DES SCORES ---
+                    # Calculs
                     rules_df['composite_score'] = calculate_composite_score(rules_df, w_support, w_lift, w_conf,
                                                                             w_surprise, 0.2)
                     rules_df['feedback_weight'] = rules_df.index.map(st.session_state['feedback_weights']).fillna(1.0)
                     rules_df['final_sampling_weight'] = rules_df['composite_score'] * rules_df['feedback_weight']
 
-                    # Layout Contrôles / Résultats
                     col_control, col_results = st.columns([1, 2.5])
 
                     with col_control:
@@ -286,25 +285,25 @@ if uploaded_file:
                                                 random_seed=int(random_seed))
                             st.session_state['last_sample'] = sample
 
+                        # --- FIX BUG 1 : RESET FEEDBACK ---
                         if st.button("♻️ Reset Feedback", use_container_width=True):
-                            reset_feedback()
+                            st.session_state['feedback_weights'] = {}
+                            st.toast("Feedback réinitialisé !", icon="↺")
+                            time.sleep(0.5)  # Petit délai pour l'UX
                             st.rerun()
 
                         st.markdown("---")
                         st.markdown("**📊 Distribution des Scores**")
-                        # Histogramme comparatif
                         fig_dist = px.histogram(rules_df, x="final_sampling_weight", nbins=20,
                                                 title="Pool (Gris) vs Sample (Bleu)",
                                                 color_discrete_sequence=['lightgray'], opacity=0.6)
                         fig_dist.update_layout(showlegend=False, height=250, margin=dict(l=0, r=0, t=30, b=0))
 
                         if st.session_state['last_sample'] is not None:
-                            # Overlay du sample
                             sample_hist = px.histogram(st.session_state['last_sample'], x="final_sampling_weight",
                                                        nbins=20,
                                                        color_discrete_sequence=['blue'])
                             fig_dist.add_trace(sample_hist.data[0])
-
                         st.plotly_chart(fig_dist, use_container_width=True)
 
                     with col_results:
@@ -313,7 +312,6 @@ if uploaded_file:
                         if st.session_state['last_sample'] is not None:
                             sample = st.session_state['last_sample']
 
-                            # --- KPI ---
                             total_feedback = sum(1 for w in st.session_state['feedback_weights'].values() if w != 1.0)
                             positive_feedback = sum(1 for w in st.session_state['feedback_weights'].values() if w > 1.0)
                             acceptance_rate = (positive_feedback / total_feedback) * 100 if total_feedback > 0 else 0
@@ -321,36 +319,34 @@ if uploaded_file:
                             coverage_global = st.session_state['processor'].calculate_global_coverage(sample)
 
                             kpi1, kpi2, kpi3 = st.columns(3)
-                            kpi1.metric("Taux Like", f"{acceptance_rate:.0f}%",
-                                        help="% de likes sur le total des votes")
-                            kpi2.metric("Diversité", f"{diversity:.2f}",
-                                        help="Mesure de dissimilarité (1 = très divers)")
-                            kpi3.metric("Couverture", f"{coverage_global * 100:.1f}%",
-                                        help="% des transactions couvertes par ces règles")
+                            kpi1.metric("Taux Like", f"{acceptance_rate:.0f}%")
+                            kpi2.metric("Diversité", f"{diversity:.2f}")
+                            kpi3.metric("Couverture", f"{coverage_global * 100:.1f}%")
 
                             st.divider()
 
-                            # --- CARTES DE RÈGLES ---
+                            # --- FIX BUG 2 : COULEUR DU TEXTE ---
+                            # On force color: #1f2937 (gris foncé presque noir) pour la lisibilité
                             for i, row in sample.iterrows():
                                 rid = row['rule_id'] if 'rule_id' in row else row.name
                                 cw = st.session_state['feedback_weights'].get(rid, 1.0)
 
-                                # Design conditionnel
-                                bg_color = ""
+                                # Style CSS conditionnel
+                                base_style = "padding: 10px; border-radius: 5px; color: #1f2937;"
                                 if cw > 1.0:
-                                    bg_color = "background-color: #dcfce7; padding: 10px; border-radius: 5px;"  # Vert clair
+                                    bg_style = f"background-color: #dcfce7; border-left: 5px solid #22c55e; {base_style}"  # Vert
                                 elif cw < 1.0:
-                                    bg_color = "background-color: #fee2e2; padding: 10px; border-radius: 5px;"  # Rouge clair
+                                    bg_style = f"background-color: #fee2e2; border-left: 5px solid #ef4444; {base_style}"  # Rouge
                                 else:
-                                    bg_color = "padding: 10px;"
+                                    bg_style = f"background-color: #f3f4f6; border-left: 5px solid #9ca3af; {base_style}"  # Gris neutre
 
                                 with st.container():
-                                    # Layout interne de la carte
                                     c_txt, c_vals, c_act = st.columns([3, 1.5, 1.5])
 
                                     with c_txt:
+                                        # Injection HTML avec couleur forcée
                                         st.markdown(
-                                            f"<div style='{bg_color}'><b>{row['antecedents_str']} ➝ {row['consequents_str']}</b></div>",
+                                            f"<div style='{bg_style}'><b>{row['antecedents_str']} ➝ {row['consequents_str']}</b></div>",
                                             unsafe_allow_html=True)
 
                                     with c_vals:
@@ -358,7 +354,6 @@ if uploaded_file:
 
                                     with c_act:
                                         b_col1, b_col2, b_col3 = st.columns(3)
-                                        # Gestion état des boutons
                                         if cw > 1.0:
                                             b_col1.button("👍", key=f"l_{i}", disabled=True)
                                             if b_col2.button("↺", key=f"r_{i}"):
@@ -378,10 +373,7 @@ if uploaded_file:
                                                 st.rerun()
                                     st.markdown("---")
                         else:
-                            st.info("👈 Cliquez sur 'Générer' pour commencer l'exploration.")
+                            st.info("👈 Cliquez sur 'Générer' pour commencer.")
 
     except Exception as e:
-        st.error(f"Une erreur critique est survenue : {e}")
-        # En prod, on peut cacher le détail technique
-        with st.expander("Détails de l'erreur"):
-            st.exception(e)
+        st.error(f"Une erreur est survenue : {e}")
