@@ -17,10 +17,8 @@ st.set_page_config(
 st.title("⛏️ Projet EDA : Fouille Interactive de Motifs")
 
 # --- GESTION ÉTAT & NETTOYAGE AUTOMATIQUE ---
-# Cette section doit être tout en haut pour intercepter le changement de fichier
 if 'last_uploaded_file' not in st.session_state:
     st.session_state['last_uploaded_file'] = None
-
 
 def clear_cache():
     """Nettoie toute la mémoire de session liée aux données"""
@@ -28,7 +26,6 @@ def clear_cache():
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
-
 
 # --- SIDEBAR (PARAMÈTRES) ---
 with st.sidebar:
@@ -38,11 +35,9 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Charger un CSV", type=["csv"])
 
     # DÉTECTION DE CHANGEMENT DE FICHIER
-    # Si le fichier change (ou devient None), on reset tout.
     if uploaded_file != st.session_state['last_uploaded_file']:
         clear_cache()
         st.session_state['last_uploaded_file'] = uploaded_file
-        # On force un rerun immédiat pour que l'interface se mette à jour à vide
         st.rerun()
 
     format_option = st.selectbox("Format", ["Auto", "Basic", "Long", "Wide", "Sequential"])
@@ -77,7 +72,7 @@ with st.sidebar:
     replace_strategy = st.checkbox("Avec Remise", value=True)
     random_seed = st.number_input("Seed", value=42)
 
-# --- INIT VARIABLES SESSION (si elles n'existent pas après le clear) ---
+# --- INIT VARIABLES SESSION ---
 if 'pool_rules' not in st.session_state: st.session_state['pool_rules'] = None
 if 'feedback_weights' not in st.session_state: st.session_state['feedback_weights'] = {}
 if 'last_sample' not in st.session_state: st.session_state['last_sample'] = None
@@ -87,17 +82,13 @@ if 'processor' not in st.session_state: st.session_state['processor'] = None
 # --- MAIN LOGIC ---
 if uploaded_file:
     try:
-        # Chargement et Preprocessing
-        # On utilise une clé de cache basée sur le file_id pour éviter de recharger pandas à chaque clic
         @st.cache_data
         def load_data(file):
             return pd.read_csv(file)
 
-
         raw_df = load_data(uploaded_file)
         tgt = target_col if target_col.strip() != "" else None
 
-        # On ne réinstancie le processor que s'il est vide (optimisation)
         if st.session_state['processor'] is None:
             processor = TransactionDf(dataframe=raw_df, target_column=tgt, separator=sep_option,
                                       formatting=format_option)
@@ -140,7 +131,6 @@ if uploaded_file:
                 with c_btn:
                     launch_btn = st.button("🚀 Lancer l'Extraction", type="primary", use_container_width=True)
 
-                # Logique d'extraction
                 if launch_btn:
                     start_time = time.time()
                     with st.spinner("Algorithme en cours d'exécution..."):
@@ -194,14 +184,13 @@ if uploaded_file:
                                 st.success(
                                     f"Sampling terminé en {st.session_state['exec_time']:.3f} sec : {len(sampled_rules)} règles.")
 
-                # Visualisation du Pool (Uniquement si pool existe)
+                # Visualisation du Pool
                 if st.session_state['pool_rules'] is not None:
                     rules_df = st.session_state['pool_rules'].copy()
 
                     st.divider()
                     st.markdown("#### 🔍 Explorer les règles")
 
-                    # Filtre produits
                     all_items_in_rules = sorted(list(set(
                         [item for sublist in rules_df['antecedents'] for item in sublist] +
                         [item for sublist in rules_df['consequents'] for item in sublist]
@@ -285,11 +274,12 @@ if uploaded_file:
                                                 random_seed=int(random_seed))
                             st.session_state['last_sample'] = sample
 
-                        # --- FIX BUG 1 : RESET FEEDBACK ---
+                        # --- CORRECTION BUG ---
+                        # Remplacement de l'icône invalide ↺ par 🔄
                         if st.button("♻️ Reset Feedback", use_container_width=True):
                             st.session_state['feedback_weights'] = {}
-                            st.toast("Feedback réinitialisé !", icon="↺")
-                            time.sleep(0.5)  # Petit délai pour l'UX
+                            st.toast("Feedback réinitialisé !", icon="🔄")
+                            time.sleep(0.5)
                             st.rerun()
 
                         st.markdown("---")
@@ -325,26 +315,22 @@ if uploaded_file:
 
                             st.divider()
 
-                            # --- FIX BUG 2 : COULEUR DU TEXTE ---
-                            # On force color: #1f2937 (gris foncé presque noir) pour la lisibilité
                             for i, row in sample.iterrows():
                                 rid = row['rule_id'] if 'rule_id' in row else row.name
                                 cw = st.session_state['feedback_weights'].get(rid, 1.0)
 
-                                # Style CSS conditionnel
                                 base_style = "padding: 10px; border-radius: 5px; color: #1f2937;"
                                 if cw > 1.0:
-                                    bg_style = f"background-color: #dcfce7; border-left: 5px solid #22c55e; {base_style}"  # Vert
+                                    bg_style = f"background-color: #dcfce7; border-left: 5px solid #22c55e; {base_style}"
                                 elif cw < 1.0:
-                                    bg_style = f"background-color: #fee2e2; border-left: 5px solid #ef4444; {base_style}"  # Rouge
+                                    bg_style = f"background-color: #fee2e2; border-left: 5px solid #ef4444; {base_style}"
                                 else:
-                                    bg_style = f"background-color: #f3f4f6; border-left: 5px solid #9ca3af; {base_style}"  # Gris neutre
+                                    bg_style = f"background-color: #f3f4f6; border-left: 5px solid #9ca3af; {base_style}"
 
                                 with st.container():
                                     c_txt, c_vals, c_act = st.columns([3, 1.5, 1.5])
 
                                     with c_txt:
-                                        # Injection HTML avec couleur forcée
                                         st.markdown(
                                             f"<div style='{bg_style}'><b>{row['antecedents_str']} ➝ {row['consequents_str']}</b></div>",
                                             unsafe_allow_html=True)
