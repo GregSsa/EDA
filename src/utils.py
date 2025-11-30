@@ -106,7 +106,7 @@ class TransactionDf():
     def get_df(self):
         return self.dfs[0] if self.dfs else None
 
-    # --- NOUVEAU : Méthode pour le coverage global de l'échantillon ---
+    # NOUVEAU : Méthode pour le coverage global de l'échantillon
     def calculate_global_coverage(self, sample_rules):
         """Calcule le % de transactions couvertes par AU MOINS une règle de l'échantillon."""
         if self.dfs and not sample_rules.empty:
@@ -127,7 +127,7 @@ class TransactionDf():
             return len(covered_indices) / len(df)
         return 0.0
 
-# --- Métriques d'évaluation ---
+# Métriques d'évaluation
 def calculate_diversity(sample_df):
     """Calcul simple de diversité : (Nombre d'items uniques utilisés) / (Total items possibles dans l'échantillon)"""
     if sample_df.empty: return 0.0
@@ -202,7 +202,7 @@ def light_mcmc(P_df, k=10, replace=True, max_iters=10000, random_seed=None):
     return P_df.iloc[samples].reset_index(drop=True)
 
 
-# --- Fonctions utilitaires pour MCMC ---
+# Fonctions utilitaires pour MCMC
 def support(itemset: frozenset, vertical: dict, N: int) -> float:
     """Calcul rapide du support via l'index vertical. Plus rapide que fpgrowth pour petits itemsets."""
     if not itemset:
@@ -235,7 +235,7 @@ def interest_weight(itemset: frozenset, interest: str, rng, vertical: dict, N: i
     return max(0.0, lift)
 
 
-# --- Pattern Sampling (Output Sampling) MCMC ---
+# Pattern Sampling (Output Sampling) MCMC
 def pattern_sample_mcmc(df_onehot: pd.DataFrame,
                         iterations: int = 5000,
                         min_support: float = 0.005,
