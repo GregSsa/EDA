@@ -41,62 +41,59 @@ def render_mining_section(
     with c_btn:
         launch_btn = st.button("Lancer l'Extraction", type="primary", use_container_width=True)
 
-    if not launch_btn:
-        return
+    if launch_btn:
+        start_time = time.time()
+        with st.spinner("Algorithme en cours d'exécution..."):
+            if algo_choice == "Exhaustive (FP-Growth)":
+                frequent = fpgrowth(df_encoded.astype(bool), min_support=min_support, use_colnames=True)
+                if frequent.empty:
+                    st.warning("Aucun motif trouvé. Essayez de baisser le support minimum.")
+                else:
+                    rules = association_rules(frequent, metric="confidence", min_threshold=min_confidence)
+                    if rules.empty:
+                        st.warning("Aucune règle trouvée. Essayez de baisser la confiance.")
+                    else:
+                        end_time = time.time()
+                        st.session_state['exec_time'] = end_time - start_time
+                        rules['length'] = rules['antecedents'].apply(len) + rules['consequents'].apply(len)
+                        if 'antecedent support' in rules.columns:
+                            rules.rename(columns={'antecedent support': 'coverage'}, inplace=True)
+                        rules['antecedents_str'] = rules['antecedents'].apply(lambda x: ', '.join(list(x)))
+                        rules['consequents_str'] = rules['consequents'].apply(lambda x: ', '.join(list(x)))
+                        rules['rule_id'] = rules.index
 
-    start_time = time.time()
-    with st.spinner("Algorithme en cours d'exécution..."):
-        if algo_choice == "Exhaustive (FP-Growth)":
-            frequent = fpgrowth(df_encoded.astype(bool), min_support=min_support, use_colnames=True)
-            if frequent.empty:
-                st.warning("Aucun motif trouvé. Essayez de baisser le support minimum.")
-                return
-            rules = association_rules(frequent, metric="confidence", min_threshold=min_confidence)
-            if rules.empty:
-                st.warning("Aucune règle trouvée. Essayez de baisser la confiance.")
-                return
-
-            end_time = time.time()
-            st.session_state['exec_time'] = end_time - start_time
-            rules['length'] = rules['antecedents'].apply(len) + rules['consequents'].apply(len)
-            if 'antecedent support' in rules.columns:
-                rules.rename(columns={'antecedent support': 'coverage'}, inplace=True)
-            rules['antecedents_str'] = rules['antecedents'].apply(lambda x: ', '.join(list(x)))
-            rules['consequents_str'] = rules['consequents'].apply(lambda x: ', '.join(list(x)))
-            rules['rule_id'] = rules.index
-
-            st.session_state['pool_rules'] = rules
-            st.session_state['feedback_weights'] = {i: 1.0 for i in rules.index}
-            st.success(
-                f"Extraction terminée en {st.session_state['exec_time']:.3f} sec : {len(rules)} règles.")
-        else:
-            # Sampling MCMC (pool sur échantillons de motifs)
-            from utils import pattern_sample_mcmc  # import local pour éviter cycles
-            sampled_rules = pattern_sample_mcmc(
-                df_encoded,
-                iterations=int(sampling_iterations),
-                min_support=float(sampling_min_support),
-                max_rules=int(sampling_max_rules),
-                random_seed=int(random_seed)
-            )
-            if sampled_rules.empty:
-                st.warning("Aucune règle trouvée via Sampling.")
-                return
-
-            end_time = time.time()
-            st.session_state['exec_time'] = end_time - start_time
-            if 'coverage' not in sampled_rules.columns and 'support' in sampled_rules.columns:
-                sampled_rules['coverage'] = sampled_rules['support']
-            sampled_rules['antecedents_str'] = sampled_rules['antecedents'].apply(lambda x: ', '.join(list(x)))
-            sampled_rules['consequents_str'] = sampled_rules['consequents'].apply(lambda x: ', '.join(list(x)))
-            sampled_rules['rule_id'] = sampled_rules.index
-            st.session_state['pool_rules'] = sampled_rules
-            st.session_state['feedback_weights'] = {i: 1.0 for i in sampled_rules.index}
-            st.success(
-                f"Sampling terminé en {st.session_state['exec_time']:.3f} sec : {len(sampled_rules)} règles.")
+                        st.session_state['pool_rules'] = rules
+                        st.session_state['feedback_weights'] = {i: 1.0 for i in rules.index}
+                        st.success(
+                            f"Extraction terminée en {st.session_state['exec_time']:.3f} sec : {len(rules)} règles.")
+            else:
+                # Sampling MCMC (pool sur échantillons de motifs)
+                from utils import pattern_sample_mcmc  # import local pour éviter cycles
+                sampled_rules = pattern_sample_mcmc(
+                    df_encoded,
+                    iterations=int(sampling_iterations),
+                    min_support=float(sampling_min_support),
+                    max_rules=int(sampling_max_rules),
+                    random_seed=int(random_seed)
+                )
+                if sampled_rules.empty:
+                    st.warning("Aucune règle trouvée via Sampling.")
+                else:
+                    end_time = time.time()
+                    st.session_state['exec_time'] = end_time - start_time
+                    if 'coverage' not in sampled_rules.columns and 'support' in sampled_rules.columns:
+                        sampled_rules['coverage'] = sampled_rules['support']
+                    sampled_rules['antecedents_str'] = sampled_rules['antecedents'].apply(lambda x: ', '.join(list(x)))
+                    sampled_rules['consequents_str'] = sampled_rules['consequents'].apply(lambda x: ', '.join(list(x)))
+                    sampled_rules['rule_id'] = sampled_rules.index
+                    st.session_state['pool_rules'] = sampled_rules
+                    st.session_state['feedback_weights'] = {i: 1.0 for i in sampled_rules.index}
+                    st.success(
+                        f"Sampling terminé en {st.session_state['exec_time']:.3f} sec : {len(sampled_rules)} règles.")
 
     # Visualisation du Pool
     if st.session_state['pool_rules'] is None:
+        st.info("Aucune extraction encore disponible. Lancez l'extraction pour construire le pool de règles.")
         return
 
     rules_df = st.session_state['pool_rules'].copy()
