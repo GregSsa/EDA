@@ -118,7 +118,22 @@ def render_mining_section(
         rules_filtered = rules_df
 
     with col_dl:
-        csv = rules_filtered.to_csv(index=False).encode('utf-8')
+        export_df = rules_filtered.copy()
+        if 'antecedents_str' not in export_df.columns and 'antecedents' in export_df.columns:
+            export_df['antecedents_str'] = export_df['antecedents'].apply(
+                lambda x: ', '.join(list(x)) if isinstance(x, (set, frozenset)) else str(x)
+            )
+        if 'consequents_str' not in export_df.columns and 'consequents' in export_df.columns:
+            export_df['consequents_str'] = export_df['consequents'].apply(
+                lambda x: ', '.join(list(x)) if isinstance(x, (set, frozenset)) else str(x)
+            )
+
+        export_cols = ['antecedents_str', 'consequents_str']
+        for col in ['support', 'confidence', 'lift', 'coverage', 'length']:
+            if col in export_df.columns:
+                export_cols.append(col)
+
+        csv = export_df[export_cols].to_csv(index=False).encode('utf-8')
         st.download_button("💾 Télécharger CSV", data=csv, file_name='regles_association.csv', mime='text/csv')
 
     st.caption(f"Affichage de **{len(rules_filtered)}** règles sur {len(rules_df)}.")
@@ -228,7 +243,22 @@ def render_interactive_section(
         st.divider()
 
         # Téléchargement de l'échantillon
-        sample_csv = sample.to_csv(index=False).encode('utf-8')
+        export_sample = sample.copy()
+        if 'antecedents_str' not in export_sample.columns and 'antecedents' in export_sample.columns:
+            export_sample['antecedents_str'] = export_sample['antecedents'].apply(
+                lambda x: ', '.join(list(x)) if isinstance(x, (set, frozenset)) else str(x)
+            )
+        if 'consequents_str' not in export_sample.columns and 'consequents' in export_sample.columns:
+            export_sample['consequents_str'] = export_sample['consequents'].apply(
+                lambda x: ', '.join(list(x)) if isinstance(x, (set, frozenset)) else str(x)
+            )
+
+        export_cols_s = ['antecedents_str', 'consequents_str']
+        for col in ['support', 'confidence', 'lift', 'coverage', 'length', 'final_sampling_weight']:
+            if col in export_sample.columns:
+                export_cols_s.append(col)
+
+        sample_csv = export_sample[export_cols_s].to_csv(index=False).encode('utf-8')
         st.download_button("💾 Télécharger l'échantillon", data=sample_csv, file_name='echantillon.csv', mime='text/csv')
 
         for i, row in sample.iterrows():
